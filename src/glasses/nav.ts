@@ -79,15 +79,43 @@ function buildScreen(): TextContainerProperty[] {
   }
 }
 
+// Rebuilds are serialized: while one is in flight, further render() calls
+// only mark the state dirty, and the latest state is pushed once the current
+// write finishes. This prevents overlapping BLE writes from applying out of
+// order (a stale screen overwriting a newer one) and keeps rapid scrolling
+// from queueing a rebuild per tick.
+let renderInFlight = false
+let renderDirty = false
+
 function render(): void {
+  if (renderInFlight) {
+    renderDirty = true
+    return
+  }
+  void renderLoop()
+}
+
+async function renderLoop(): Promise<void> {
   if (!bridge) return
-  bridge.rebuildPageContainer(
-    new RebuildPageContainer({
-      containerTotalNum: CONTAINER_TOTAL,
-      textObject: buildScreen(),
-      imageObject: [],
-    }),
-  )
+  renderInFlight = true
+  try {
+    do {
+      renderDirty = false
+      try {
+        await bridge.rebuildPageContainer(
+          new RebuildPageContainer({
+            containerTotalNum: CONTAINER_TOTAL,
+            textObject: buildScreen(),
+            imageObject: [],
+          }),
+        )
+      } catch (err) {
+        console.error('rebuildPageContainer failed', err)
+      }
+    } while (renderDirty)
+  } finally {
+    renderInFlight = false
+  }
 }
 
 // getAppLocation may never resolve on hosts without location support, so we
