@@ -8,8 +8,11 @@ import { mountPhoneUI } from './phone/ui.ts'
 
 const bridge = await waitForEvenAppBridge()
 
-await initGlasses(bridge)
+// Phone UI does not depend on the glasses container existing — mount it
+// first so the phone screen isn't blank while the BLE round-trip runs.
+// (render() no-ops safely until initGlasses sets the bridge.)
 mountPhoneUI(document.querySelector<HTMLDivElement>('#app')!)
+await initGlasses(bridge)
 
 let cleanedUp = false
 function cleanup() {
