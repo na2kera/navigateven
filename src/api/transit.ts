@@ -44,7 +44,10 @@ export interface RoutePlan {
 }
 
 const ENDPOINT = 'https://api.transit.ls8h.com/api/v1/plan'
-const PLAN_TIMEOUT_MS = 15_000
+// Live measurement: the API can legitimately take 17s+ on heavy routes, so
+// this must stay well above that. Users can double-tap out of the searching
+// screen at any time.
+const PLAN_TIMEOUT_MS = 30_000
 
 // Journeys with absurd durations (e.g. arrival on the next day because the
 // only remaining bus departs 19h later) do appear in real responses.

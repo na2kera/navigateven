@@ -19,30 +19,47 @@ const NOMINATIM_ENDPOINT = 'https://nominatim.openstreetmap.org/search'
 // finds almost none of them), but for facility names GSI returns unrelated
 // place-name matches nationwide. So route by query shape and use the other
 // source as fallback when the first returns nothing.
+//
+// Address shapes only — a bare digit is not enough, or facility names like
+// 「◯◯タワー3階」 would route to GSI, get a coarse non-empty hit, and never
+// reach Nominatim (which knows the actual facility).
 function looksLikeAddress(query: string): boolean {
   return (
-    /[0-9０-９]|丁目|番地|号/.test(query) ||
+    /[0-9０-９]+\s*(丁目|番地?|号)/.test(query) ||
+    /[0-9０-９]+[-−ー－][0-9０-９]+/.test(query) ||
     /^(東京都|北海道|京都府|大阪府|.{2,3}県)/.test(query)
   )
 }
 
-export async function searchPlaces(query: string): Promise<GeocodeResult[]> {
+// Trailing floor/level qualifiers (「〜3階」「〜10F」) never help geocoding —
+// they just turn an exact facility match into zero hits — so strip them
+// before routing. Verified live: 「六本木ヒルズ森タワー3階」 misses on
+// Nominatim while 「六本木ヒルズ森タワー」 hits the exact building.
+function normalizeQuery(query: string): string {
+  return query.replace(/\s*(地下|Ｂ|B)?[0-9０-９]+\s*(階|[FＦfｆ])$/, '').trim() || query
+}
+
+export async function searchPlaces(rawQuery: string): Promise<GeocodeResult[]> {
+  const query = normalizeQuery(rawQuery)
   const sources = looksLikeAddress(query)
     ? [searchGsi, searchNominatim]
     : [searchNominatim, searchGsi]
 
+  let anySourceSucceeded = false
   let lastError: unknown = null
   for (const search of sources) {
     try {
       const results = await search(query)
+      anySourceSucceeded = true
       if (results.length > 0) return results
     } catch (err) {
       lastError = err
     }
   }
-  // Both empty → no hits; but if a source failed and the other was empty,
-  // surface the failure so the UI shows "check your connection".
-  if (lastError) throw lastError
+  // If at least one source answered (even with zero hits), "not found" is a
+  // valid result — only surface a failure when every source failed, so the
+  // UI doesn't show a connection error for a legitimately unknown place.
+  if (!anySourceSucceeded && lastError) throw lastError
   return []
 }
 
