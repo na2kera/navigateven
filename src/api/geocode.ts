@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from './http.ts'
+
 export interface GeocodeResult {
   name: string
   displayName: string
@@ -44,8 +46,13 @@ export async function searchPlaces(query: string): Promise<GeocodeResult[]> {
   return []
 }
 
+const SEARCH_TIMEOUT_MS = 10_000
+
 async function searchGsi(query: string): Promise<GeocodeResult[]> {
-  const res = await fetch(`${GSI_ENDPOINT}?q=${encodeURIComponent(query)}`)
+  const res = await fetchWithTimeout(
+    `${GSI_ENDPOINT}?q=${encodeURIComponent(query)}`,
+    SEARCH_TIMEOUT_MS,
+  )
   if (!res.ok) throw new Error(`GSI error: ${res.status}`)
   const data = await res.json()
   if (!Array.isArray(data)) return []
@@ -72,7 +79,7 @@ async function searchNominatim(query: string): Promise<GeocodeResult[]> {
   })
   if (CONTACT_EMAIL) params.set('email', CONTACT_EMAIL)
 
-  const res = await fetch(`${NOMINATIM_ENDPOINT}?${params}`)
+  const res = await fetchWithTimeout(`${NOMINATIM_ENDPOINT}?${params}`, SEARCH_TIMEOUT_MS)
   if (!res.ok) throw new Error(`Nominatim error: ${res.status}`)
   const data = await res.json()
   if (!Array.isArray(data)) return []

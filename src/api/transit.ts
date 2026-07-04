@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from './http.ts'
+
 export interface LatLng {
   lat: number
   lng: number
@@ -42,6 +44,7 @@ export interface RoutePlan {
 }
 
 const ENDPOINT = 'https://api.transit.ls8h.com/api/v1/plan'
+const PLAN_TIMEOUT_MS = 15_000
 
 // Journeys with absurd durations (e.g. arrival on the next day because the
 // only remaining bus departs 19h later) do appear in real responses.
@@ -52,7 +55,7 @@ export async function planRoute(from: LatLng, to: LatLng): Promise<RoutePlan | n
     from: `geo:${from.lat},${from.lng}`,
     to: `geo:${to.lat},${to.lng}`,
   })
-  const res = await fetch(`${ENDPOINT}?${params}`)
+  const res = await fetchWithTimeout(`${ENDPOINT}?${params}`, PLAN_TIMEOUT_MS)
   if (!res.ok) throw new Error(`transit API error: ${res.status}`)
   const data: ApiPlanResponse = await res.json()
 
