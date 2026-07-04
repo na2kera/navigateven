@@ -1,27 +1,14 @@
 import {
   waitForEvenAppBridge,
   OsEventTypeList,
-  TextContainerProperty,
-  CreateStartUpPageContainer,
 } from '@evenrealities/even_hub_sdk'
+import { initGlasses, refreshDestinations, handleInput } from './glasses/nav.ts'
+import { mountPhoneUI } from './phone/ui.ts'
 
 const bridge = await waitForEvenAppBridge()
 
-const statusText = new TextContainerProperty({
-  xPosition: 20,
-  yPosition: 20,
-  width: 536,
-  height: 248,
-  containerID: 1,
-  containerName: 'status',
-  content: 'NavigatEven\nReady',
-  isEventCapture: 1,
-})
-
-await bridge.createStartUpPageContainer(new CreateStartUpPageContainer({
-  containerTotalNum: 1,
-  textObject: [statusText],
-}))
+await initGlasses(bridge)
+mountPhoneUI(document.querySelector<HTMLDivElement>('#app')!)
 
 let cleanedUp = false
 function cleanup() {
@@ -30,8 +17,14 @@ function cleanup() {
   unsubscribe()
 }
 
+// Event routing (timetableven idiom):
+//   • CLICK_EVENT (0) arrives as undefined on the wire — coalesce with ?? null
+//   • Scroll gestures come through sysEvent (and sometimes textEvent/listEvent)
+//     so we check all three paths defensively.
 const unsubscribe = bridge.onEvenHubEvent(event => {
   const sysType = event.sysEvent?.eventType ?? null
+  const textType = event.textEvent?.eventType ?? null
+  const listType = event.listEvent?.eventType ?? null
 
   if (
     sysType === OsEventTypeList.SYSTEM_EXIT_EVENT ||
@@ -41,8 +34,15 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
     return
   }
 
-  if (sysType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
-    bridge.shutDownPageContainer(1)
+  // Foreground re-entered → reload destinations (phone side may have edited)
+  if (sysType === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
+    refreshDestinations()
+    return
+  }
+
+  const eventType = sysType ?? textType ?? listType
+  if (eventType !== null) {
+    handleInput(eventType)
   }
 })
 
