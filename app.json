@@ -6,6 +6,16 @@
   "min_app_version": "2.0.0",
   "min_sdk_version": "0.0.11",
   "entrypoint": "index.html",
-  "permissions": ["location"],
+  "permissions": [
+    {
+      "name": "location",
+      "desc": "Get your current position to search transit routes from where you are."
+    },
+    {
+      "name": "network",
+      "desc": "Search destinations (OpenStreetMap Nominatim) and fetch transit routes (transit.ls8h.com).",
+      "whitelist": ["https://api.transit.ls8h.com", "https://nominatim.openstreetmap.org"]
+    }
+  ],
   "supported_languages": ["en"]
 }
