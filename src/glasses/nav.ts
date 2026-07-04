@@ -1,6 +1,7 @@
 import {
   type EvenAppBridge,
   type AppLocation,
+  type TextContainerProperty,
   AppLocationAccuracy,
   CreateStartUpPageContainer,
   RebuildPageContainer,
@@ -19,7 +20,13 @@ import {
   routePageCount,
 } from './layout.ts'
 
-type Mode = 'list' | 'searching' | 'route' | 'error'
+// Which glasses screen is showing, as a tagged union so each screen only
+// carries the fields that are valid for it.
+type Screen =
+  | { kind: 'list' }
+  | { kind: 'searching'; dest: Destination }
+  | { kind: 'route'; dest: Destination; lines: string[]; page: number; isDemo: boolean }
+  | { kind: 'error'; dest: Destination; message: string }
 
 // Fallback when the host returns no position (the simulator does not
 // implement the location bridge at all). Tokyo Station.
@@ -27,15 +34,12 @@ const DEMO_LOCATION = { lat: 35.6812, lng: 139.7671 }
 const LOCATION_TIMEOUT_MS = 8000
 
 let bridge: EvenAppBridge | null = null
-let mode: Mode = 'list'
+let screen: Screen = { kind: 'list' }
+// List context lives outside Screen so the selection survives visiting other
+// screens and coming back.
 let destinations: Destination[] = []
 let selectedIndex = 0
 let scrollOffset = 0
-let currentDest: Destination | null = null
-let routeLines: string[] = []
-let routePage = 0
-let isDemoLocation = false
-let errorMessage = ''
 let searchToken = 0
 
 export async function initGlasses(evenBridge: EvenAppBridge): Promise<void> {
@@ -44,7 +48,7 @@ export async function initGlasses(evenBridge: EvenAppBridge): Promise<void> {
   await bridge.createStartUpPageContainer(
     new CreateStartUpPageContainer({
       containerTotalNum: CONTAINER_TOTAL,
-      textObject: buildListScreen(destinations, selectedIndex, scrollOffset),
+      textObject: buildScreen(),
       imageObject: [],
     }),
   )
@@ -57,38 +61,30 @@ export async function refreshDestinations(): Promise<void> {
     selectedIndex = Math.max(0, destinations.length - 1)
   }
   scrollOffset = Math.min(scrollOffset, Math.max(0, destinations.length - VISIBLE_ROWS))
-  if (mode === 'list') await pushRebuild()
+  if (screen.kind === 'list') render()
 }
 
-async function pushRebuild(): Promise<void> {
-  if (!bridge) return
-  let containers
-  if (mode === 'list') {
-    containers = buildListScreen(destinations, selectedIndex, scrollOffset)
-  } else if (mode === 'searching') {
-    containers = buildMessageScreen(
-      `→ ${currentDest?.name ?? ''}`,
-      '経路を検索中...',
-      '2回タップ: 戻る',
-    )
-  } else if (mode === 'error') {
-    containers = buildMessageScreen(
-      `→ ${currentDest?.name ?? ''}`,
-      errorMessage,
-      'タップ:再試行  2回:戻る',
-    )
-  } else {
-    containers = buildRouteScreen(
-      currentDest?.name ?? '',
-      routeLines,
-      routePage,
-      isDemoLocation,
-    )
+// The exhaustive switch (no default, must return) makes the compiler reject a
+// new Screen kind until it renders something.
+function buildScreen(): TextContainerProperty[] {
+  switch (screen.kind) {
+    case 'list':
+      return buildListScreen(destinations, selectedIndex, scrollOffset)
+    case 'searching':
+      return buildMessageScreen(`→ ${screen.dest.name}`, '経路を検索中...', '2回タップ: 戻る')
+    case 'route':
+      return buildRouteScreen(screen.dest.name, screen.lines, screen.page, screen.isDemo)
+    case 'error':
+      return buildMessageScreen(`→ ${screen.dest.name}`, screen.message, 'タップ:再試行  2回:戻る')
   }
-  await bridge.rebuildPageContainer(
+}
+
+function render(): void {
+  if (!bridge) return
+  bridge.rebuildPageContainer(
     new RebuildPageContainer({
       containerTotalNum: CONTAINER_TOTAL,
-      textObject: containers,
+      textObject: buildScreen(),
       imageObject: [],
     }),
   )
@@ -117,9 +113,8 @@ async function getCurrentLocation(): Promise<{ lat: number; lng: number; isDemo:
 
 async function startSearch(dest: Destination): Promise<void> {
   const token = ++searchToken
-  currentDest = dest
-  mode = 'searching'
-  await pushRebuild()
+  screen = { kind: 'searching', dest }
+  render()
 
   try {
     const origin = await getCurrentLocation()
@@ -128,40 +123,45 @@ async function startSearch(dest: Destination): Promise<void> {
     if (token !== searchToken) return
 
     if (!plan) {
-      mode = 'error'
-      errorMessage = '経路が見つかりませんでした'
-      await pushRebuild()
-      return
+      screen = { kind: 'error', dest, message: '経路が見つかりませんでした' }
+    } else {
+      screen = {
+        kind: 'route',
+        dest,
+        lines: wrapLines(plan.lines),
+        page: 0,
+        isDemo: origin.isDemo,
+      }
     }
-    isDemoLocation = origin.isDemo
-    routeLines = wrapLines(plan.lines)
-    routePage = 0
-    mode = 'route'
-    await pushRebuild()
+    render()
   } catch {
     if (token !== searchToken) return
-    mode = 'error'
-    errorMessage = '経路検索に失敗しました\n通信状態を確認してください'
-    await pushRebuild()
+    screen = { kind: 'error', dest, message: '経路検索に失敗しました\n通信状態を確認してください' }
+    render()
   }
 }
 
 function backToList(): void {
   searchToken++ // invalidate any in-flight search
-  mode = 'list'
-  currentDest = null
-  routeLines = []
-  routePage = 0
-  pushRebuild()
+  screen = { kind: 'list' }
+  render()
 }
 
 // Event handling — call this from onEvenHubEvent
 export function handleInput(eventType: OsEventTypeList): void {
-  switch (mode) {
-    case 'list':      handleList(eventType);      break
-    case 'searching': handleSearching(eventType); break
-    case 'route':     handleRoute(eventType);     break
-    case 'error':     handleError(eventType);     break
+  switch (screen.kind) {
+    case 'list':
+      handleList(eventType)
+      break
+    case 'searching':
+      if (eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) backToList()
+      break
+    case 'route':
+      handleRoute(screen, eventType)
+      break
+    case 'error':
+      handleError(screen, eventType)
+      break
   }
 }
 
@@ -170,13 +170,13 @@ function handleList(eventType: OsEventTypeList): void {
     if (selectedIndex < destinations.length - 1) {
       selectedIndex++
       if (selectedIndex >= scrollOffset + VISIBLE_ROWS) scrollOffset++
-      pushRebuild()
+      render()
     }
   } else if (eventType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
     if (selectedIndex > 0) {
       selectedIndex--
       if (selectedIndex < scrollOffset) scrollOffset--
-      pushRebuild()
+      render()
     }
   } else if (eventType === OsEventTypeList.CLICK_EVENT) {
     const dest = destinations[selectedIndex]
@@ -186,33 +186,33 @@ function handleList(eventType: OsEventTypeList): void {
   }
 }
 
-function handleSearching(eventType: OsEventTypeList): void {
-  if (eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
-    backToList()
-  }
-}
-
-function handleRoute(eventType: OsEventTypeList): void {
+function handleRoute(
+  current: Extract<Screen, { kind: 'route' }>,
+  eventType: OsEventTypeList,
+): void {
   if (eventType === OsEventTypeList.SCROLL_TOP_EVENT) {
-    if (routePage < routePageCount(routeLines) - 1) {
-      routePage++
-      pushRebuild()
+    if (current.page < routePageCount(current.lines) - 1) {
+      screen = { ...current, page: current.page + 1 }
+      render()
     }
   } else if (eventType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
-    if (routePage > 0) {
-      routePage--
-      pushRebuild()
+    if (current.page > 0) {
+      screen = { ...current, page: current.page - 1 }
+      render()
     }
   } else if (eventType === OsEventTypeList.CLICK_EVENT) {
-    if (currentDest) startSearch(currentDest) // re-search from fresh position
+    startSearch(current.dest) // re-search from fresh position
   } else if (eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
     backToList()
   }
 }
 
-function handleError(eventType: OsEventTypeList): void {
+function handleError(
+  current: Extract<Screen, { kind: 'error' }>,
+  eventType: OsEventTypeList,
+): void {
   if (eventType === OsEventTypeList.CLICK_EVENT) {
-    if (currentDest) startSearch(currentDest)
+    startSearch(current.dest)
   } else if (eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
     backToList()
   }
