@@ -56,11 +56,18 @@ export async function initGlasses(evenBridge: EvenAppBridge): Promise<void> {
 
 // Called by the phone UI after add/edit/delete so the glasses list stays fresh.
 export async function refreshDestinations(): Promise<void> {
+  // Follow the selected destination by id, not by position — deleting an
+  // entry above it must not silently re-point the selection elsewhere.
+  const selectedId = destinations[selectedIndex]?.id
   destinations = getAllDestinations()
-  if (selectedIndex >= destinations.length) {
-    selectedIndex = Math.max(0, destinations.length - 1)
-  }
+  const followed = selectedId ? destinations.findIndex(d => d.id === selectedId) : -1
+  selectedIndex = followed >= 0
+    ? followed
+    : Math.max(0, Math.min(selectedIndex, destinations.length - 1))
+  // Keep the selection inside the visible window
   scrollOffset = Math.min(scrollOffset, Math.max(0, destinations.length - VISIBLE_ROWS))
+  if (selectedIndex < scrollOffset) scrollOffset = selectedIndex
+  if (selectedIndex >= scrollOffset + VISIBLE_ROWS) scrollOffset = selectedIndex - VISIBLE_ROWS + 1
   if (screen.kind === 'list') render()
 }
 
