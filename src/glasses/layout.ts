@@ -63,6 +63,25 @@ function hiddenRow(index: number): TextContainerProperty {
   })
 }
 
+// Rebuild payloads must always carry all row IDs; pad the unused tail here so
+// every screen builder shares one source of truth for the row-count invariant.
+function hiddenRows(fromIndex: number): TextContainerProperty[] {
+  return Array.from(
+    { length: VISIBLE_ROWS - fromIndex },
+    (_, i) => hiddenRow(fromIndex + i),
+  )
+}
+
+// Shared shape of every non-list screen: capture + header + one body
+// container (ID_ROW_BASE) + hidden remaining rows + footer.
+function buildBodyScreen(
+  headerText: string,
+  body: TextContainerProperty,
+  footerText: string,
+): TextContainerProperty[] {
+  return [buildCapture(), buildHeader(headerText), body, ...hiddenRows(1), buildFooter(footerText)]
+}
+
 // --- Destination list screen ---
 
 export function buildListScreen(
@@ -76,17 +95,18 @@ export function buildListScreen(
   ]
 
   if (destinations.length === 0) {
-    containers.push(new TextContainerProperty({
-      xPosition: 20, yPosition: BODY_Y + 40,
-      width: SCREEN_W - 40, height: 60,
-      borderWidth: 0, borderColor: 0, paddingLength: 4,
-      containerID: ID_ROW_BASE, containerName: 'row0',
-      content: '目的地がありません\nスマホで目的地を登録してください',
-      isEventCapture: 0,
-    }))
-    for (let i = 1; i < VISIBLE_ROWS; i++) containers.push(hiddenRow(i))
-    containers.push(buildFooter('2回タップ: 終了'))
-    return containers
+    return buildBodyScreen(
+      'NavigatEven  目的地を選択',
+      new TextContainerProperty({
+        xPosition: 20, yPosition: BODY_Y + 40,
+        width: SCREEN_W - 40, height: 60,
+        borderWidth: 0, borderColor: 0, paddingLength: 4,
+        containerID: ID_ROW_BASE, containerName: 'row0',
+        content: '目的地がありません\nスマホで目的地を登録してください',
+        isEventCapture: 0,
+      }),
+      '2回タップ: 終了',
+    )
   }
 
   const total = destinations.length
@@ -163,9 +183,8 @@ export function buildRouteScreen(
   const demoTag = isDemoLocation ? ' [DEMO位置]' : ''
   const pageTag = pageCount > 1 ? `  ${clampedPage + 1}/${pageCount}` : ''
 
-  return [
-    buildCapture(),
-    buildHeader(`→ ${destName}${demoTag}${pageTag}`),
+  return buildBodyScreen(
+    `→ ${destName}${demoTag}${pageTag}`,
     new TextContainerProperty({
       xPosition: 0, yPosition: BODY_Y,
       width: SCREEN_W, height: BODY_H,
@@ -174,9 +193,8 @@ export function buildRouteScreen(
       content: pageLines.join('\n') || ' ',
       isEventCapture: 0,
     }),
-    ...Array.from({ length: VISIBLE_ROWS - 1 }, (_, i) => hiddenRow(i + 1)),
-    buildFooter('スクロール:送り  タップ:再検索  2回:戻る'),
-  ]
+    'スクロール:送り  タップ:再検索  2回:戻る',
+  )
 }
 
 // --- Message screen (loading / error) ---
@@ -186,9 +204,8 @@ export function buildMessageScreen(
   message: string,
   footerText: string,
 ): TextContainerProperty[] {
-  return [
-    buildCapture(),
-    buildHeader(headerText),
+  return buildBodyScreen(
+    headerText,
     new TextContainerProperty({
       xPosition: 20, yPosition: BODY_Y + 60,
       width: SCREEN_W - 40, height: 100,
@@ -197,7 +214,6 @@ export function buildMessageScreen(
       content: message,
       isEventCapture: 0,
     }),
-    ...Array.from({ length: VISIBLE_ROWS - 1 }, (_, i) => hiddenRow(i + 1)),
-    buildFooter(footerText),
-  ]
+    footerText,
+  )
 }
