@@ -3,6 +3,7 @@ import {
   OsEventTypeList,
 } from '@evenrealities/even_hub_sdk'
 import { initGlasses, refreshDestinations, handleInput } from './glasses/nav.ts'
+import { resolveEventType } from './events.ts'
 import { mountPhoneUI } from './phone/ui.ts'
 
 const bridge = await waitForEvenAppBridge()
@@ -17,33 +18,28 @@ function cleanup() {
   unsubscribe()
 }
 
-// Event routing (timetableven idiom):
-//   • CLICK_EVENT (0) arrives as undefined on the wire — coalesce with ?? null
-//   • Scroll gestures come through sysEvent (and sometimes textEvent/listEvent)
-//     so we check all three paths defensively.
+// Event routing: resolveEventType checks sysEvent/textEvent/listEvent and
+// treats a present channel with an elided eventType as CLICK_EVENT (protobuf
+// omits default-valued fields — see src/events.ts).
 const unsubscribe = bridge.onEvenHubEvent(event => {
-  const sysType = event.sysEvent?.eventType ?? null
-  const textType = event.textEvent?.eventType ?? null
-  const listType = event.listEvent?.eventType ?? null
+  const eventType = resolveEventType(event)
+  if (eventType === null) return
 
   if (
-    sysType === OsEventTypeList.SYSTEM_EXIT_EVENT ||
-    sysType === OsEventTypeList.ABNORMAL_EXIT_EVENT
+    eventType === OsEventTypeList.SYSTEM_EXIT_EVENT ||
+    eventType === OsEventTypeList.ABNORMAL_EXIT_EVENT
   ) {
     cleanup()
     return
   }
 
   // Foreground re-entered → reload destinations (phone side may have edited)
-  if (sysType === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
+  if (eventType === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
     refreshDestinations()
     return
   }
 
-  const eventType = sysType ?? textType ?? listType
-  if (eventType !== null) {
-    handleInput(eventType)
-  }
+  handleInput(eventType)
 })
 
 window.addEventListener('beforeunload', cleanup)
