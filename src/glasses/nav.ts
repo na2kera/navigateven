@@ -200,14 +200,17 @@ export function handleInput(eventType: OsEventTypeList): void {
   }
 }
 
+// Gesture mapping (issue #15): on-device, SCROLL_BOTTOM is the gesture users
+// read as "go down / next" and SCROLL_TOP as "go up / previous" — the
+// opposite of the initial assignment.
 function handleList(eventType: OsEventTypeList): void {
-  if (eventType === OsEventTypeList.SCROLL_TOP_EVENT) {
+  if (eventType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
     if (selectedIndex < destinations.length - 1) {
       selectedIndex++
       if (selectedIndex >= scrollOffset + VISIBLE_ROWS) scrollOffset++
       render()
     }
-  } else if (eventType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
+  } else if (eventType === OsEventTypeList.SCROLL_TOP_EVENT) {
     if (selectedIndex > 0) {
       selectedIndex--
       if (selectedIndex < scrollOffset) scrollOffset--
@@ -225,12 +228,12 @@ function handleRoute(
   current: Extract<Screen, { kind: 'route' }>,
   eventType: OsEventTypeList,
 ): void {
-  if (eventType === OsEventTypeList.SCROLL_TOP_EVENT) {
+  if (eventType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
     if (current.page < routePageCount(current.lines) - 1) {
       screen = { ...current, page: current.page + 1 }
       render()
     }
-  } else if (eventType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
+  } else if (eventType === OsEventTypeList.SCROLL_TOP_EVENT) {
     if (current.page > 0) {
       screen = { ...current, page: current.page - 1 }
       render()
