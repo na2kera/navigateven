@@ -4,9 +4,13 @@ import {
 } from '@evenrealities/even_hub_sdk'
 import { initGlasses, refreshDestinations, handleInput } from './glasses/nav.ts'
 import { resolveEventType } from './events.ts'
+import { initDestinationStore } from './store/destinations.ts'
 import { mountPhoneUI } from './phone/ui.ts'
 
 const bridge = await waitForEvenAppBridge()
+
+// Load persisted destinations (host storage first) before any UI reads them
+await initDestinationStore(bridge)
 
 // Phone UI does not depend on the glasses container existing — mount it
 // first so the phone screen isn't blank while the BLE round-trip runs.
