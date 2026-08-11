@@ -9,11 +9,12 @@ import {
 } from '@evenrealities/even_hub_sdk'
 import type { Destination } from '../types.ts'
 import { getAllDestinations } from '../store/destinations.ts'
-import { planRoute } from '../api/transit.ts'
+import { planRoutes, type RoutePlan } from '../api/transit.ts'
 import {
   CONTAINER_TOTAL,
   VISIBLE_ROWS,
   buildListScreen,
+  buildCandidatesScreen,
   buildRouteScreen,
   buildMessageScreen,
   wrapLines,
@@ -21,11 +22,27 @@ import {
 } from './layout.ts'
 
 // Which glasses screen is showing, as a tagged union so each screen only
-// carries the fields that are valid for it.
+// carries the fields that are valid for it. The route detail keeps the full
+// candidate list so double-tap can return to it without re-searching.
 type Screen =
   | { kind: 'list' }
   | { kind: 'searching'; dest: Destination }
-  | { kind: 'route'; dest: Destination; lines: string[]; page: number; isDemo: boolean }
+  | {
+      kind: 'candidates'
+      dest: Destination
+      plans: RoutePlan[]
+      selectedIndex: number
+      isDemo: boolean
+    }
+  | {
+      kind: 'route'
+      dest: Destination
+      plans: RoutePlan[]
+      planIndex: number
+      lines: string[]
+      page: number
+      isDemo: boolean
+    }
   | { kind: 'error'; dest: Destination; message: string }
 
 // Fallback when the host returns no position (the simulator does not
@@ -79,6 +96,13 @@ function buildScreen(): TextContainerProperty[] {
       return buildListScreen(destinations, selectedIndex, scrollOffset)
     case 'searching':
       return buildMessageScreen(`→ ${screen.dest.name}`, '経路を検索中...', '2回タップ: 戻る')
+    case 'candidates':
+      return buildCandidatesScreen(
+        screen.dest.name,
+        screen.plans,
+        screen.selectedIndex,
+        screen.isDemo,
+      )
     case 'route':
       return buildRouteScreen(screen.dest.name, screen.lines, screen.page, screen.isDemo)
     case 'error':
@@ -154,17 +178,17 @@ async function startSearch(dest: Destination): Promise<void> {
   try {
     const origin = await getCurrentLocation()
     if (token !== searchToken) return
-    const plan = await planRoute(origin, dest)
+    const plans = await planRoutes(origin, dest)
     if (token !== searchToken) return
 
-    if (!plan) {
+    if (plans.length === 0) {
       screen = { kind: 'error', dest, message: '経路が見つかりませんでした' }
     } else {
       screen = {
-        kind: 'route',
+        kind: 'candidates',
         dest,
-        lines: wrapLines(plan.lines),
-        page: 0,
+        plans,
+        selectedIndex: 0,
         isDemo: origin.isDemo,
       }
     }
@@ -190,6 +214,9 @@ export function handleInput(eventType: OsEventTypeList): void {
       break
     case 'searching':
       if (eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) backToList()
+      break
+    case 'candidates':
+      handleCandidates(screen, eventType)
       break
     case 'route':
       handleRoute(screen, eventType)
@@ -224,6 +251,38 @@ function handleList(eventType: OsEventTypeList): void {
   }
 }
 
+function handleCandidates(
+  current: Extract<Screen, { kind: 'candidates' }>,
+  eventType: OsEventTypeList,
+): void {
+  if (eventType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
+    if (current.selectedIndex < current.plans.length - 1) {
+      screen = { ...current, selectedIndex: current.selectedIndex + 1 }
+      render()
+    }
+  } else if (eventType === OsEventTypeList.SCROLL_TOP_EVENT) {
+    if (current.selectedIndex > 0) {
+      screen = { ...current, selectedIndex: current.selectedIndex - 1 }
+      render()
+    }
+  } else if (eventType === OsEventTypeList.CLICK_EVENT) {
+    const plan = current.plans[current.selectedIndex]
+    if (!plan) return
+    screen = {
+      kind: 'route',
+      dest: current.dest,
+      plans: current.plans,
+      planIndex: current.selectedIndex,
+      lines: wrapLines(plan.lines),
+      page: 0,
+      isDemo: current.isDemo,
+    }
+    render()
+  } else if (eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+    backToList()
+  }
+}
+
 function handleRoute(
   current: Extract<Screen, { kind: 'route' }>,
   eventType: OsEventTypeList,
@@ -241,7 +300,16 @@ function handleRoute(
   } else if (eventType === OsEventTypeList.CLICK_EVENT) {
     startSearch(current.dest) // re-search from fresh position
   } else if (eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
-    backToList()
+    // Back to the candidate list (not the destination list), with the
+    // just-viewed candidate still selected.
+    screen = {
+      kind: 'candidates',
+      dest: current.dest,
+      plans: current.plans,
+      selectedIndex: current.planIndex,
+      isDemo: current.isDemo,
+    }
+    render()
   }
 }
 

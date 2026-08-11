@@ -1,5 +1,6 @@
 import { TextContainerProperty } from '@evenrealities/even_hub_sdk'
 import type { Destination } from '../types.ts'
+import { secsToClock, type RoutePlan } from '../api/transit.ts'
 
 // Display constants (Even G2 canvas, same as timetableven)
 const SCREEN_W = 576
@@ -136,6 +137,70 @@ export function buildListScreen(
   const scrollHint = `${above ? '▲' : ' '}${below ? '▼' : ' '}`
   containers.push(buildFooter(
     `${scrollHint} ${selectedIndex + 1}/${total}  タップ:検索  2回:終了`,
+  ))
+  return containers
+}
+
+// --- Route candidates screen ---
+
+// Single-row summaries must not wrap (each candidate is one fixed-height
+// row), so overflow is cut with an ellipsis instead of wrapped.
+function truncateToWidth(text: string, budget: number): string {
+  let width = 0
+  let out = ''
+  for (const ch of text) {
+    const w = ch.charCodeAt(0) > 0xff ? 2 : 1
+    if (width + w > budget - 1) return out + '…'
+    out += ch
+    width += w
+  }
+  return out
+}
+
+function candidateSummary(plan: RoutePlan, marker: string): string {
+  const durationMin = Math.round(plan.durationSecs / 60)
+  const head =
+    `${marker}${secsToClock(plan.departureSecs)}→${secsToClock(plan.arrivalSecs)}` +
+    ` ${durationMin}分 乗換${plan.transferCount}`
+  const routes = plan.routeNames.join('・')
+  return truncateToWidth(routes ? `${head} ${routes}` : head, WRAP_BUDGET)
+}
+
+// Same selection idiom as the destination list. planRoutes caps candidates
+// at 4 (< VISIBLE_ROWS), so no scroll window is needed here.
+export function buildCandidatesScreen(
+  destName: string,
+  plans: RoutePlan[],
+  selectedIndex: number,
+  isDemoLocation: boolean,
+): TextContainerProperty[] {
+  const demoTag = isDemoLocation ? ' [DEMO位置]' : ''
+  const containers: TextContainerProperty[] = [
+    buildCapture(),
+    buildHeader(`→ ${destName}${demoTag}  経路候補`),
+  ]
+
+  for (let i = 0; i < VISIBLE_ROWS; i++) {
+    const plan = plans[i]
+    if (!plan) {
+      containers.push(hiddenRow(i))
+      continue
+    }
+    const isSelected = i === selectedIndex
+    containers.push(new TextContainerProperty({
+      xPosition: 8, yPosition: BODY_Y + i * ROW_H,
+      width: SCREEN_W - 16, height: ROW_H - 4,
+      borderWidth: isSelected ? 2 : 1,
+      borderColor: isSelected ? 15 : 6,
+      paddingLength: 4,
+      containerID: ID_ROW_BASE + i, containerName: `row${i}`,
+      content: candidateSummary(plan, isSelected ? '▶ ' : '  '),
+      isEventCapture: 0,
+    }))
+  }
+
+  containers.push(buildFooter(
+    `${selectedIndex + 1}/${plans.length}  スクロール:選択  タップ:詳細  2回:戻る`,
   ))
   return containers
 }
