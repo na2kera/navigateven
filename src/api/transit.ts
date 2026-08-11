@@ -40,6 +40,8 @@ export interface RoutePlan {
   arrivalSecs: number
   durationSecs: number
   transferCount: number
+  /** Transit leg labels in ride order (e.g. 山手線), for the candidate list row */
+  routeNames: string[]
   lines: string[]
 }
 
@@ -53,7 +55,11 @@ const PLAN_TIMEOUT_MS = 30_000
 // only remaining bus departs 19h later) do appear in real responses.
 const MAX_SANE_DURATION_SECS = 6 * 3600
 
-export async function planRoute(from: LatLng, to: LatLng): Promise<RoutePlan | null> {
+// Cap so the candidate list fits on one glasses screen (VISIBLE_ROWS = 5)
+// without needing a scroll window.
+const MAX_CANDIDATES = 4
+
+export async function planRoutes(from: LatLng, to: LatLng): Promise<RoutePlan[]> {
   const params = new URLSearchParams({
     from: `geo:${from.lat},${from.lng}`,
     to: `geo:${to.lat},${to.lng}`,
@@ -62,22 +68,29 @@ export async function planRoute(from: LatLng, to: LatLng): Promise<RoutePlan | n
   if (!res.ok) throw new Error(`transit API error: ${res.status}`)
   const data: ApiPlanResponse = await res.json()
 
-  const journey = pickBestJourney(data.journeys ?? [])
-  if (!journey) return null
+  return pickCandidateJourneys(data.journeys ?? []).map(toRoutePlan)
+}
 
+function legLabel(leg: ApiLeg): string {
+  return leg.routeName ?? (leg.mode === 'bus' ? 'バス' : '列車')
+}
+
+function toRoutePlan(journey: ApiJourney): RoutePlan {
   return {
     departureSecs: journey.departureSecs,
     arrivalSecs: journey.arrivalSecs,
     durationSecs: journey.durationSecs,
     transferCount: journey.transferCount,
+    routeNames: journey.legs.filter(l => l.kind === 'transit').map(legLabel),
     lines: formatJourney(journey),
   }
 }
 
-// The API does not guarantee the first journey is the best one: real
-// responses put a 2-transfer bus route ahead of a direct train. Pick the
-// earliest sane arrival ourselves.
-export function pickBestJourney(journeys: ApiJourney[]): ApiJourney | null {
+// The API does not guarantee any useful ordering: real responses put a
+// 2-transfer bus route ahead of a direct train. Sort by arrival ourselves,
+// drop duplicate journeys, and make sure the fewest-transfer option is in
+// the list so the candidates aren't just one route at successive departures.
+export function pickCandidateJourneys(journeys: ApiJourney[]): ApiJourney[] {
   const sane = journeys.filter(
     j =>
       j.arrivalSecs > j.departureSecs &&
@@ -86,8 +99,29 @@ export function pickBestJourney(journeys: ApiJourney[]): ApiJourney | null {
       Array.isArray(j.legs) &&
       j.legs.length > 0,
   )
-  if (sane.length === 0) return null
-  return sane.reduce((best, j) => (j.arrivalSecs < best.arrivalSecs ? j : best))
+  const byArrival = [...sane].sort(
+    (a, b) => a.arrivalSecs - b.arrivalSecs || a.durationSecs - b.durationSecs,
+  )
+
+  const seen = new Set<string>()
+  const unique: ApiJourney[] = []
+  for (const j of byArrival) {
+    const sig = j.legs
+      .map(l =>
+        l.kind === 'walk' ? 'walk' : `${legLabel(l)}:${l.from.id}>${l.to.id}@${l.departureSecs}`,
+      )
+      .join('|')
+    if (seen.has(sig)) continue
+    seen.add(sig)
+    unique.push(j)
+  }
+
+  const picked = unique.slice(0, MAX_CANDIDATES)
+  const minTransfers = unique.reduce((m, j) => Math.min(m, j.transferCount), Infinity)
+  if (picked.length > 0 && picked.every(j => j.transferCount > minTransfers)) {
+    picked[picked.length - 1] = unique.find(j => j.transferCount === minTransfers)!
+  }
+  return picked
 }
 
 export function secsToClock(secs: number): string {
@@ -140,7 +174,7 @@ export function formatJourney(journey: ApiJourney): string[] {
       lines.push(`${stepNo}. 徒歩 ${walkMinutes(step.secs)}分`)
     } else {
       const { leg } = step
-      const route = leg.routeName ?? (leg.mode === 'bus' ? 'バス' : '列車')
+      const route = legLabel(leg)
       const headsign = leg.headsign ? ` ${leg.headsign}` : ''
       lines.push(`${stepNo}. ${route}${headsign}`)
       lines.push(`   ${leg.from.name} ${secsToClock(leg.departureSecs)}`)
