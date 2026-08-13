@@ -159,15 +159,24 @@ function render(): void {
   void renderLoop()
 }
 
+// A failed rebuild leaves the glasses on the PREVIOUS screen while `screen`
+// already points at the new one, so input would be handled against a state
+// the user cannot see. Retry a few times (BLE hiccups are transient) before
+// giving up until the next render() call.
+const REBUILD_MAX_RETRIES = 2
+const REBUILD_RETRY_DELAY_MS = 500
+
 async function renderLoop(): Promise<void> {
   if (!bridge) return
   renderInFlight = true
+  let retriesLeft = REBUILD_MAX_RETRIES
   try {
     do {
       renderDirty = false
       const payload = buildScreen()
+      let rebuilt: boolean
       try {
-        const rebuilt = await bridge.rebuildPageContainer(
+        const result = await bridge.rebuildPageContainer(
           new RebuildPageContainer({
             containerTotalNum: CONTAINER_TOTAL,
             textObject: payload.textObject,
@@ -176,15 +185,24 @@ async function renderLoop(): Promise<void> {
         )
         // Only an explicit false counts as failure: a host that resolves a
         // non-boolean (despite the SDK type) must not permanently disable
-        // icon rendering.
-        if (rebuilt === false) {
-          console.error('rebuildPageContainer returned false')
-          continue // don't push icons onto a stale page
-        }
+        // rendering or icon pushes.
+        rebuilt = result !== false
+        if (!rebuilt) console.error('rebuildPageContainer returned false')
       } catch (err) {
         console.error('rebuildPageContainer failed', err)
-        continue // text rebuild failed — don't push icons onto a stale page
+        rebuilt = false
       }
+      if (!rebuilt) {
+        // Don't push icons onto a stale page; retry the whole rebuild so the
+        // displayed screen catches up with the input state.
+        if (retriesLeft > 0) {
+          retriesLeft--
+          renderDirty = true
+          await new Promise(resolve => setTimeout(resolve, REBUILD_RETRY_DELAY_MS))
+        }
+        continue
+      }
+      retriesLeft = REBUILD_MAX_RETRIES
       // Icon raw data rides the same serialized loop as the rebuild, so a
       // page flip never interleaves BLE image writes with the next rebuild:
       // when the state goes dirty mid-push we abandon the rest (their

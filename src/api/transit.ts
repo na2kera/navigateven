@@ -82,8 +82,25 @@ export async function planRoutes(from: LatLng, to: LatLng): Promise<RoutePlan[]>
   return pickCandidateJourneys(data.journeys ?? []).map(toRoutePlan)
 }
 
+// The transit API's leg modes (GET /api/openapi.json, 2026-08 snapshot):
+// tram, subway, rail, bus, ferry, cableTram, aerialLift, funicular,
+// trolleybus, monorail, air.
+const BUS_MODES = new Set(['bus', 'trolleybus'])
+// Modes that are neither rail-ish nor bus-ish: showing a train icon for a
+// ferry or a flight would be misinformation, so these get no icon at all.
+const NON_RAIL_MODES = new Set(['ferry', 'air', 'aerialLift'])
+// Fallback labels when the API sends no routeName; without this a ferry leg
+// would be captioned 列車.
+const MODE_FALLBACK_LABELS: Record<string, string> = {
+  bus: 'バス',
+  trolleybus: 'バス',
+  ferry: 'フェリー',
+  air: '航空便',
+  aerialLift: 'ロープウェイ',
+}
+
 function legLabel(leg: ApiLeg): string {
-  return leg.routeName ?? (leg.mode === 'bus' ? 'バス' : '列車')
+  return leg.routeName ?? MODE_FALLBACK_LABELS[leg.mode ?? ''] ?? '列車'
 }
 
 function toRoutePlan(journey: ApiJourney): RoutePlan {
@@ -147,11 +164,14 @@ function walkMinutes(secs: number): number {
   return Math.max(1, Math.round(secs / 60))
 }
 
-// Unknown rail-ish transit modes fall back to the train icon; only an
-// explicit bus mode gets the bus icon (issue #19).
-function legIcon(leg: ApiLeg): RouteIconKind {
+// Bus-ish modes get the bus icon, known non-rail modes (ferry/air/ropeway)
+// get none, and everything else — the rail-ish modes plus missing or
+// future unknown values — falls back to the train icon (issue #19).
+function legIcon(leg: ApiLeg): RouteIconKind | undefined {
   if (leg.kind === 'walk') return 'walk'
-  return leg.mode === 'bus' ? 'bus' : 'train'
+  if (leg.mode !== undefined && BUS_MODES.has(leg.mode)) return 'bus'
+  if (leg.mode !== undefined && NON_RAIL_MODES.has(leg.mode)) return undefined
+  return 'train'
 }
 
 // accessWalkSecs / egressWalkSecs are NOT part of legs, so the walk from the
