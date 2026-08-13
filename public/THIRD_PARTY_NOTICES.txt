@@ -1,0 +1,27 @@
+Third-Party Notices for NavigatEven
+===================================
+
+Material Symbols (Google)
+-------------------------
+
+The following icon assets bundled with this application:
+
+  icons/walk.png
+  icons/train.png
+  icons/bus.png
+
+are modified derivative works based on Google's Material Symbols
+(directions_walk / directions_railway / directions_bus). They were
+simplified and re-drawn as 20x20 px monochrome pixel art for the
+Even G2 576x288 display. These files differ from the original
+Material Symbols artwork.
+
+Material Symbols is licensed under the Apache License, Version 2.0.
+A full copy of the license is distributed with this application at:
+
+  licenses/Apache-2.0.txt
+
+Copyright Google LLC
+
+Source: https://github.com/google/material-design-icons
+        https://fonts.google.com/icons

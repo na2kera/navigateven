@@ -167,13 +167,20 @@ async function renderLoop(): Promise<void> {
       renderDirty = false
       const payload = buildScreen()
       try {
-        await bridge.rebuildPageContainer(
+        const rebuilt = await bridge.rebuildPageContainer(
           new RebuildPageContainer({
             containerTotalNum: CONTAINER_TOTAL,
             textObject: payload.textObject,
             imageObject: payload.imageObject,
           }),
         )
+        // Only an explicit false counts as failure: a host that resolves a
+        // non-boolean (despite the SDK type) must not permanently disable
+        // icon rendering.
+        if (rebuilt === false) {
+          console.error('rebuildPageContainer returned false')
+          continue // don't push icons onto a stale page
+        }
       } catch (err) {
         console.error('rebuildPageContainer failed', err)
         continue // text rebuild failed — don't push icons onto a stale page
