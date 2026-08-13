@@ -1,6 +1,11 @@
-import { TextContainerProperty } from '@evenrealities/even_hub_sdk'
+import { TextContainerProperty, ImageContainerProperty } from '@evenrealities/even_hub_sdk'
 import type { Destination } from '../types.ts'
-import { secsToClock, type RoutePlan } from '../api/transit.ts'
+import {
+  secsToClock,
+  type RoutePlan,
+  type RouteDisplayLine,
+  type RouteIconKind,
+} from '../api/transit.ts'
 
 // Display constants (Even G2 canvas, same as timetableven)
 const SCREEN_W = 576
@@ -16,13 +21,37 @@ export const ID_CAPTURE = 1
 export const ID_HEADER = 2
 const ID_ROW_BASE = 3 // 3..7
 export const ID_FOOTER = 8
-export const CONTAINER_TOTAL = 8
+const ID_ICON_BASE = 9 // 9..12, route step icons (issue #19)
+export const ICON_CONTAINER_COUNT = 4 // hard SDK limit: max 4 imageObject entries
+export const CONTAINER_TOTAL = 12
 
 export const VISIBLE_ROWS = 5
 const ROW_H = Math.floor(BODY_H / VISIBLE_ROWS) // 46px
 
-export const LINES_PER_PAGE = 9
+// 8 lines/page keeps the number of step-head lines (= icons) within the
+// 4-image-container limit and gives the bottom line breathing room.
+export const LINES_PER_PAGE = 8
 const WRAP_BUDGET = 44 // half-width units per line
+
+// Route body text metrics, measured pixel-exact on simulator v0.7.3
+// (issue #19): 27px line pitch, glyphs sit ~5px below the line-box top with
+// ~18px visible height. A 20x20 icon centered on the glyph band starts 4px
+// below the line-box top. Re-measure on real glasses — the simulator README
+// warns font rendering may differ.
+const ROUTE_TEXT_PADDING = 6
+const ROUTE_LINE_PITCH = 27
+const ICON_SIZE = 20
+const ICON_X = 6
+const ICON_Y_OFFSET = 4
+// The body text container starts right of the icon gutter (text at x=32),
+// so icons can never overlap text regardless of font metrics. The body font
+// is proportional (a half-width space is ~5px), so indenting text out of the
+// gutter with spaces would not survive a font change.
+const ROUTE_TEXT_X = 32
+// Text area shrank by 26px vs the full-width layout; 2 half-width units off
+// the wrap budget keeps lines from overflowing into a renderer-side wrap
+// (which would break the line↔icon correspondence).
+const ROUTE_WRAP_BUDGET = WRAP_BUDGET - 2
 
 function buildCapture(): TextContainerProperty {
   return new TextContainerProperty({
@@ -208,54 +237,127 @@ export function buildCandidatesScreen(
 // --- Route (itinerary) screen ---
 
 // Width-aware wrap: full-width chars count as 2 half-width units.
-export function wrapLines(lines: string[]): string[] {
-  const wrapped: string[] = []
+// Continuation lines never inherit the icon — it marks the step head only.
+export function wrapLines(lines: RouteDisplayLine[]): RouteDisplayLine[] {
+  const wrapped: RouteDisplayLine[] = []
   for (const line of lines) {
     let current = ''
     let width = 0
-    for (const ch of line) {
+    let icon = line.icon
+    for (const ch of line.text) {
       const w = ch.charCodeAt(0) > 0xff ? 2 : 1
-      if (width + w > WRAP_BUDGET) {
-        wrapped.push(current)
+      if (width + w > ROUTE_WRAP_BUDGET) {
+        wrapped.push(icon ? { text: current, icon } : { text: current })
+        icon = undefined
         current = '  '
         width = 2
       }
       current += ch
       width += w
     }
-    wrapped.push(current)
+    wrapped.push(icon ? { text: current, icon } : { text: current })
   }
   return wrapped
 }
 
-export function routePageCount(wrappedLines: string[]): number {
+export function routePageCount(wrappedLines: RouteDisplayLine[]): number {
   return Math.max(1, Math.ceil(wrappedLines.length / LINES_PER_PAGE))
+}
+
+function routePageLines(wrappedLines: RouteDisplayLine[], page: number): RouteDisplayLine[] {
+  const clampedPage = Math.min(page, routePageCount(wrappedLines) - 1)
+  return wrappedLines.slice(
+    clampedPage * LINES_PER_PAGE,
+    (clampedPage + 1) * LINES_PER_PAGE,
+  )
+}
+
+// Raw-data push for one icon container, executed serially after the rebuild.
+export interface IconPush {
+  containerID: number
+  containerName: string
+  kind: RouteIconKind
+}
+
+function iconContainerName(index: number): string {
+  return `icon${index}`
+}
+
+function hiddenIcon(index: number): ImageContainerProperty {
+  // Same off-screen parking idiom as hiddenRow, but image containers have a
+  // 20px minimum size, so park fully above-left of the origin.
+  return new ImageContainerProperty({
+    xPosition: -ICON_SIZE, yPosition: -ICON_SIZE,
+    width: ICON_SIZE, height: ICON_SIZE,
+    containerID: ID_ICON_BASE + index,
+    containerName: iconContainerName(index),
+  })
+}
+
+// Every rebuild payload must carry all 4 image container IDs; non-route
+// screens park them all off-screen.
+export function hiddenIconContainers(): ImageContainerProperty[] {
+  return Array.from({ length: ICON_CONTAINER_COUNT }, (_, i) => hiddenIcon(i))
+}
+
+// Positions the step icons of the visible page (x=6, one per step-head
+// line), parking the unused tail. Lines beyond the 4th icon keep their text
+// but drop the icon — with merged walk steps and 8 lines/page this cannot
+// happen structurally, so this is only a guard for the SDK's hard limit.
+export function buildRouteIcons(
+  wrappedLines: RouteDisplayLine[],
+  page: number,
+): { imageObject: ImageContainerProperty[]; pushes: IconPush[] } {
+  const pageLines = routePageLines(wrappedLines, page)
+  const imageObject: ImageContainerProperty[] = []
+  const pushes: IconPush[] = []
+
+  pageLines.forEach((line, lineIndex) => {
+    if (!line.icon || pushes.length >= ICON_CONTAINER_COUNT) return
+    const index = pushes.length
+    imageObject.push(new ImageContainerProperty({
+      xPosition: ICON_X,
+      yPosition: BODY_Y + ROUTE_TEXT_PADDING + lineIndex * ROUTE_LINE_PITCH + ICON_Y_OFFSET,
+      width: ICON_SIZE, height: ICON_SIZE,
+      containerID: ID_ICON_BASE + index,
+      containerName: iconContainerName(index),
+    }))
+    pushes.push({
+      containerID: ID_ICON_BASE + index,
+      containerName: iconContainerName(index),
+      kind: line.icon,
+    })
+  })
+
+  for (let i = imageObject.length; i < ICON_CONTAINER_COUNT; i++) {
+    imageObject.push(hiddenIcon(i))
+  }
+  return { imageObject, pushes }
 }
 
 export function buildRouteScreen(
   destName: string,
-  wrappedLines: string[],
+  wrappedLines: RouteDisplayLine[],
   page: number,
   isDemoLocation: boolean,
 ): TextContainerProperty[] {
   const pageCount = routePageCount(wrappedLines)
   const clampedPage = Math.min(page, pageCount - 1)
-  const pageLines = wrappedLines.slice(
-    clampedPage * LINES_PER_PAGE,
-    (clampedPage + 1) * LINES_PER_PAGE,
-  )
+  const pageLines = routePageLines(wrappedLines, clampedPage)
 
   const demoTag = isDemoLocation ? ' [DEMO位置]' : ''
   const pageTag = pageCount > 1 ? `  ${clampedPage + 1}/${pageCount}` : ''
 
+  // Container left edge sits at ROUTE_TEXT_X - padding so the first glyph
+  // column lands exactly on ROUTE_TEXT_X, clear of the icon gutter.
   return buildBodyScreen(
     `→ ${destName}${demoTag}${pageTag}`,
     new TextContainerProperty({
-      xPosition: 0, yPosition: BODY_Y,
-      width: SCREEN_W, height: BODY_H,
-      borderWidth: 0, borderColor: 0, paddingLength: 6,
+      xPosition: ROUTE_TEXT_X - ROUTE_TEXT_PADDING, yPosition: BODY_Y,
+      width: SCREEN_W - (ROUTE_TEXT_X - ROUTE_TEXT_PADDING), height: BODY_H,
+      borderWidth: 0, borderColor: 0, paddingLength: ROUTE_TEXT_PADDING,
       containerID: ID_ROW_BASE, containerName: 'row0',
-      content: pageLines.join('\n') || ' ',
+      content: pageLines.map(l => l.text).join('\n') || ' ',
       isEventCapture: 0,
     }),
     'スクロール:送り  タップ:再検索  2回:戻る',

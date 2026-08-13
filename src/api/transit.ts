@@ -35,6 +35,17 @@ interface ApiPlanResponse {
   journeys?: ApiJourney[]
 }
 
+/** Icon shown at the head of a route step (issue #19). */
+export type RouteIconKind = 'walk' | 'train' | 'bus'
+
+// A display line of the route detail screen. `icon` is set only on the first
+// line of a step; station/time lines and wrap continuations carry none, so
+// the renderer can place at most one 20x20 icon per step.
+export interface RouteDisplayLine {
+  text: string
+  icon?: RouteIconKind
+}
+
 export interface RoutePlan {
   departureSecs: number
   arrivalSecs: number
@@ -42,7 +53,7 @@ export interface RoutePlan {
   transferCount: number
   /** Transit leg labels in ride order (e.g. 山手線), for the candidate list row */
   routeNames: string[]
-  lines: string[]
+  lines: RouteDisplayLine[]
 }
 
 const ENDPOINT = 'https://api.transit.ls8h.com/api/v1/plan'
@@ -136,18 +147,25 @@ function walkMinutes(secs: number): number {
   return Math.max(1, Math.round(secs / 60))
 }
 
+// Unknown rail-ish transit modes fall back to the train icon; only an
+// explicit bus mode gets the bus icon (issue #19).
+function legIcon(leg: ApiLeg): RouteIconKind {
+  if (leg.kind === 'walk') return 'walk'
+  return leg.mode === 'bus' ? 'bus' : 'train'
+}
+
 // accessWalkSecs / egressWalkSecs are NOT part of legs, so the walk from the
 // current position to the first stop (and last stop to destination) must be
 // added explicitly. Consecutive walks (e.g. station transfer walk followed by
 // egress walk) are merged into a single step.
-export function formatJourney(journey: ApiJourney): string[] {
-  const lines: string[] = []
+export function formatJourney(journey: ApiJourney): RouteDisplayLine[] {
+  const lines: RouteDisplayLine[] = []
   const durationMin = Math.round(journey.durationSecs / 60)
-  lines.push(
-    `出発 ${secsToClock(journey.departureSecs)} → 到着 ${secsToClock(journey.arrivalSecs)}`,
-  )
-  lines.push(`所要 ${durationMin}分 / 乗換 ${journey.transferCount}回`)
-  lines.push('')
+  lines.push({
+    text: `出発 ${secsToClock(journey.departureSecs)} → 到着 ${secsToClock(journey.arrivalSecs)}`,
+  })
+  lines.push({ text: `所要 ${durationMin}分 / 乗換 ${journey.transferCount}回` })
+  lines.push({ text: '' })
 
   type Step =
     | { kind: 'walk'; secs: number }
@@ -167,20 +185,23 @@ export function formatJourney(journey: ApiJourney): string[] {
   }
   if ((journey.egressWalkSecs ?? 0) > 0) pushWalk(journey.egressWalkSecs!)
 
-  let stepNo = 1
+  // Step numbers are replaced by mode icons (issue #19). The icons live in a
+  // gutter LEFT of the route text container (the body font is proportional,
+  // so space-indenting into a gutter would be font-dependent) — step lines
+  // therefore start unindented, and station/time lines keep their relative
+  // space indent.
   for (const step of steps) {
     if (step.kind === 'walk') {
       if (step.secs < 60) continue // skip negligible walks
-      lines.push(`${stepNo}. 徒歩 ${walkMinutes(step.secs)}分`)
+      lines.push({ text: `徒歩 ${walkMinutes(step.secs)}分`, icon: 'walk' })
     } else {
       const { leg } = step
       const route = legLabel(leg)
       const headsign = leg.headsign ? ` ${leg.headsign}` : ''
-      lines.push(`${stepNo}. ${route}${headsign}`)
-      lines.push(`   ${leg.from.name} ${secsToClock(leg.departureSecs)}`)
-      lines.push(`   → ${leg.to.name} ${secsToClock(leg.arrivalSecs)}`)
+      lines.push({ text: `${route}${headsign}`, icon: legIcon(leg) })
+      lines.push({ text: `   ${leg.from.name} ${secsToClock(leg.departureSecs)}` })
+      lines.push({ text: `   → ${leg.to.name} ${secsToClock(leg.arrivalSecs)}` })
     }
-    stepNo++
   }
 
   return lines
