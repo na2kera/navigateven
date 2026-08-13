@@ -2,14 +2,22 @@ import {
   type EvenAppBridge,
   type AppLocation,
   type TextContainerProperty,
+  type ImageContainerProperty,
   AppLocationAccuracy,
   CreateStartUpPageContainer,
   RebuildPageContainer,
+  ImageRawDataUpdate,
+  ImageRawDataUpdateResult,
   OsEventTypeList,
 } from '@evenrealities/even_hub_sdk'
 import type { Destination } from '../types.ts'
 import { getAllDestinations } from '../store/destinations.ts'
-import { planRoutes, type RoutePlan } from '../api/transit.ts'
+import {
+  planRoutes,
+  type RoutePlan,
+  type RouteDisplayLine,
+  type RouteIconKind,
+} from '../api/transit.ts'
 import {
   CONTAINER_TOTAL,
   VISIBLE_ROWS,
@@ -17,8 +25,11 @@ import {
   buildCandidatesScreen,
   buildRouteScreen,
   buildMessageScreen,
+  buildRouteIcons,
+  hiddenIconContainers,
   wrapLines,
   routePageCount,
+  type IconPush,
 } from './layout.ts'
 
 // Which glasses screen is showing, as a tagged union so each screen only
@@ -39,7 +50,7 @@ type Screen =
       dest: Destination
       plans: RoutePlan[]
       planIndex: number
-      lines: string[]
+      lines: RouteDisplayLine[]
       page: number
       isDemo: boolean
     }
@@ -62,11 +73,12 @@ let searchToken = 0
 export async function initGlasses(evenBridge: EvenAppBridge): Promise<void> {
   bridge = evenBridge
   destinations = getAllDestinations()
+  const payload = buildScreen()
   await bridge.createStartUpPageContainer(
     new CreateStartUpPageContainer({
       containerTotalNum: CONTAINER_TOTAL,
-      textObject: buildScreen(),
-      imageObject: [],
+      textObject: payload.textObject,
+      imageObject: payload.imageObject,
     }),
   )
 }
@@ -88,25 +100,46 @@ export async function refreshDestinations(): Promise<void> {
   if (screen.kind === 'list') render()
 }
 
+interface ScreenPayload {
+  textObject: TextContainerProperty[]
+  imageObject: ImageContainerProperty[]
+  /** Icon raw-data pushes to run serially after the rebuild (route only) */
+  iconPushes: IconPush[]
+}
+
+function textOnly(textObject: TextContainerProperty[]): ScreenPayload {
+  return { textObject, imageObject: hiddenIconContainers(), iconPushes: [] }
+}
+
 // The exhaustive switch (no default, must return) makes the compiler reject a
 // new Screen kind until it renders something.
-function buildScreen(): TextContainerProperty[] {
+function buildScreen(): ScreenPayload {
   switch (screen.kind) {
     case 'list':
-      return buildListScreen(destinations, selectedIndex, scrollOffset)
+      return textOnly(buildListScreen(destinations, selectedIndex, scrollOffset))
     case 'searching':
-      return buildMessageScreen(`→ ${screen.dest.name}`, '経路を検索中...', '2回タップ: 戻る')
+      return textOnly(
+        buildMessageScreen(`→ ${screen.dest.name}`, '経路を検索中...', '2回タップ: 戻る'),
+      )
     case 'candidates':
-      return buildCandidatesScreen(
+      return textOnly(buildCandidatesScreen(
         screen.dest.name,
         screen.plans,
         screen.selectedIndex,
         screen.isDemo,
-      )
-    case 'route':
-      return buildRouteScreen(screen.dest.name, screen.lines, screen.page, screen.isDemo)
+      ))
+    case 'route': {
+      const { imageObject, pushes } = buildRouteIcons(screen.lines, screen.page)
+      return {
+        textObject: buildRouteScreen(screen.dest.name, screen.lines, screen.page, screen.isDemo),
+        imageObject,
+        iconPushes: pushes,
+      }
+    }
     case 'error':
-      return buildMessageScreen(`→ ${screen.dest.name}`, screen.message, 'タップ:再試行  2回:戻る')
+      return textOnly(
+        buildMessageScreen(`→ ${screen.dest.name}`, screen.message, 'タップ:再試行  2回:戻る'),
+      )
   }
 }
 
@@ -132,20 +165,70 @@ async function renderLoop(): Promise<void> {
   try {
     do {
       renderDirty = false
+      const payload = buildScreen()
       try {
         await bridge.rebuildPageContainer(
           new RebuildPageContainer({
             containerTotalNum: CONTAINER_TOTAL,
-            textObject: buildScreen(),
-            imageObject: [],
+            textObject: payload.textObject,
+            imageObject: payload.imageObject,
           }),
         )
       } catch (err) {
         console.error('rebuildPageContainer failed', err)
+        continue // text rebuild failed — don't push icons onto a stale page
       }
+      // Icon raw data rides the same serialized loop as the rebuild, so a
+      // page flip never interleaves BLE image writes with the next rebuild:
+      // when the state goes dirty mid-push we abandon the rest (their
+      // containers are about to be re-parked/moved anyway) and loop.
+      await pushIcons(payload.iconPushes)
     } while (renderDirty)
   } finally {
     renderInFlight = false
+  }
+}
+
+// PNG bytes are fetched once per kind and kept in memory; a failed fetch is
+// evicted so a later render can retry. Any failure here only costs the
+// pictograms — the route text is already on screen.
+const iconBytesCache = new Map<RouteIconKind, Promise<Uint8Array>>()
+
+function loadIconBytes(kind: RouteIconKind): Promise<Uint8Array> {
+  let bytes = iconBytesCache.get(kind)
+  if (!bytes) {
+    bytes = fetch(`${import.meta.env.BASE_URL}icons/${kind}.png`).then(async res => {
+      if (!res.ok) throw new Error(`icon fetch failed: ${res.status}`)
+      return new Uint8Array(await res.arrayBuffer())
+    })
+    bytes.catch(() => iconBytesCache.delete(kind))
+    iconBytesCache.set(kind, bytes)
+  }
+  return bytes
+}
+
+// updateImageRawData must be serial (one in flight at a time), and only
+// while the just-rebuilt screen is still current.
+async function pushIcons(pushes: IconPush[]): Promise<void> {
+  if (!bridge) return
+  for (const push of pushes) {
+    if (renderDirty) return
+    try {
+      const bytes = await loadIconBytes(push.kind)
+      if (renderDirty) return
+      const result = await bridge.updateImageRawData(
+        new ImageRawDataUpdate({
+          containerID: push.containerID,
+          containerName: push.containerName,
+          imageData: bytes,
+        }),
+      )
+      if (result !== ImageRawDataUpdateResult.success) {
+        console.error(`updateImageRawData(${push.kind}) failed:`, result)
+      }
+    } catch (err) {
+      console.error(`icon push (${push.kind}) failed`, err)
+    }
   }
 }
 
