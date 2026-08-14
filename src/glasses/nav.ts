@@ -28,7 +28,8 @@ import {
   buildRouteIcons,
   hiddenIconContainers,
   wrapLines,
-  routePageCount,
+  maxRouteLineOffset,
+  ROUTE_SCROLL_STEP,
   type IconPush,
 } from './layout.ts'
 
@@ -51,7 +52,7 @@ type Screen =
       plans: RoutePlan[]
       planIndex: number
       lines: RouteDisplayLine[]
-      page: number
+      lineOffset: number
       isDemo: boolean
     }
   | { kind: 'error'; dest: Destination; message: string }
@@ -129,9 +130,9 @@ function buildScreen(): ScreenPayload {
         screen.isDemo,
       ))
     case 'route': {
-      const { imageObject, pushes } = buildRouteIcons(screen.lines, screen.page)
+      const { imageObject, pushes } = buildRouteIcons(screen.lines, screen.lineOffset)
       return {
-        textObject: buildRouteScreen(screen.dest.name, screen.lines, screen.page, screen.isDemo),
+        textObject: buildRouteScreen(screen.dest.name, screen.lines, screen.lineOffset, screen.isDemo),
         imageObject,
         iconPushes: pushes,
       }
@@ -382,7 +383,7 @@ function handleCandidates(
       plans: current.plans,
       planIndex: current.selectedIndex,
       lines: wrapLines(plan.lines),
-      page: 0,
+      lineOffset: 0,
       isDemo: current.isDemo,
     }
     render()
@@ -396,13 +397,20 @@ function handleRoute(
   eventType: OsEventTypeList,
 ): void {
   if (eventType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
-    if (current.page < routePageCount(current.lines) - 1) {
-      screen = { ...current, page: current.page + 1 }
+    // Seamless line-wise scroll (issue #25): slide the 8-line window by
+    // ROUTE_SCROLL_STEP instead of flipping whole pages.
+    const next = Math.min(
+      current.lineOffset + ROUTE_SCROLL_STEP,
+      maxRouteLineOffset(current.lines),
+    )
+    if (next !== current.lineOffset) {
+      screen = { ...current, lineOffset: next }
       render()
     }
   } else if (eventType === OsEventTypeList.SCROLL_TOP_EVENT) {
-    if (current.page > 0) {
-      screen = { ...current, page: current.page - 1 }
+    const next = Math.max(current.lineOffset - ROUTE_SCROLL_STEP, 0)
+    if (next !== current.lineOffset) {
+      screen = { ...current, lineOffset: next }
       render()
     }
   } else if (eventType === OsEventTypeList.CLICK_EVENT) {

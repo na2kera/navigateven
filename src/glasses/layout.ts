@@ -28,9 +28,15 @@ export const CONTAINER_TOTAL = 12
 export const VISIBLE_ROWS = 5
 const ROW_H = Math.floor(BODY_H / VISIBLE_ROWS) // 46px
 
-// 8 lines/page keeps the number of step-head lines (= icons) within the
-// 4-image-container limit and gives the bottom line breathing room.
-export const LINES_PER_PAGE = 8
+// An 8-line window keeps the number of step-head lines (= icons) within the
+// 4-image-container limit and gives the bottom line breathing room. The
+// densest real line pattern is walk(1)+transit(3) = 2 icons per 4 lines, so
+// ANY 8 consecutive lines carry at most 4 icons — the limit holds at every
+// scroll offset, not just page-aligned ones (issue #25).
+export const ROUTE_VISIBLE_LINES = 8
+// Lines moved per scroll gesture. 1 needs too many gestures to read a long
+// route; whole-window jumps lose reading context (the issue #25 complaint).
+export const ROUTE_SCROLL_STEP = 2
 const WRAP_BUDGET = 44 // half-width units per line
 
 // Route body text metrics, measured pixel-exact on simulator v0.7.3
@@ -260,16 +266,21 @@ export function wrapLines(lines: RouteDisplayLine[]): RouteDisplayLine[] {
   return wrapped
 }
 
-export function routePageCount(wrappedLines: RouteDisplayLine[]): number {
-  return Math.max(1, Math.ceil(wrappedLines.length / LINES_PER_PAGE))
+// Largest valid scroll offset: the last window shows the final 8 lines.
+export function maxRouteLineOffset(wrappedLines: RouteDisplayLine[]): number {
+  return Math.max(0, wrappedLines.length - ROUTE_VISIBLE_LINES)
 }
 
-function routePageLines(wrappedLines: RouteDisplayLine[], page: number): RouteDisplayLine[] {
-  const clampedPage = Math.min(page, routePageCount(wrappedLines) - 1)
-  return wrappedLines.slice(
-    clampedPage * LINES_PER_PAGE,
-    (clampedPage + 1) * LINES_PER_PAGE,
-  )
+function clampOffset(wrappedLines: RouteDisplayLine[], lineOffset: number): number {
+  return Math.max(0, Math.min(lineOffset, maxRouteLineOffset(wrappedLines)))
+}
+
+function routeWindowLines(
+  wrappedLines: RouteDisplayLine[],
+  lineOffset: number,
+): RouteDisplayLine[] {
+  const offset = clampOffset(wrappedLines, lineOffset)
+  return wrappedLines.slice(offset, offset + ROUTE_VISIBLE_LINES)
 }
 
 // Raw-data push for one icon container, executed serially after the rebuild.
@@ -300,19 +311,20 @@ export function hiddenIconContainers(): ImageContainerProperty[] {
   return Array.from({ length: ICON_CONTAINER_COUNT }, (_, i) => hiddenIcon(i))
 }
 
-// Positions the step icons of the visible page (x=6, one per step-head
+// Positions the step icons of the visible window (x=6, one per step-head
 // line), parking the unused tail. Lines beyond the 4th icon keep their text
-// but drop the icon — with merged walk steps and 8 lines/page this cannot
-// happen structurally, so this is only a guard for the SDK's hard limit.
+// but drop the icon — with merged walk steps and an 8-line window this
+// cannot happen structurally, so this is only a guard for the SDK's hard
+// limit.
 export function buildRouteIcons(
   wrappedLines: RouteDisplayLine[],
-  page: number,
+  lineOffset: number,
 ): { imageObject: ImageContainerProperty[]; pushes: IconPush[] } {
-  const pageLines = routePageLines(wrappedLines, page)
+  const windowLines = routeWindowLines(wrappedLines, lineOffset)
   const imageObject: ImageContainerProperty[] = []
   const pushes: IconPush[] = []
 
-  pageLines.forEach((line, lineIndex) => {
+  windowLines.forEach((line, lineIndex) => {
     if (!line.icon || pushes.length >= ICON_CONTAINER_COUNT) return
     const index = pushes.length
     imageObject.push(new ImageContainerProperty({
@@ -338,26 +350,30 @@ export function buildRouteIcons(
 export function buildRouteScreen(
   destName: string,
   wrappedLines: RouteDisplayLine[],
-  page: number,
+  lineOffset: number,
   isDemoLocation: boolean,
 ): TextContainerProperty[] {
-  const pageCount = routePageCount(wrappedLines)
-  const clampedPage = Math.min(page, pageCount - 1)
-  const pageLines = routePageLines(wrappedLines, clampedPage)
+  const maxOffset = maxRouteLineOffset(wrappedLines)
+  const offset = clampOffset(wrappedLines, lineOffset)
+  const windowLines = routeWindowLines(wrappedLines, offset)
 
   const demoTag = isDemoLocation ? ' [DEMO位置]' : ''
-  const pageTag = pageCount > 1 ? `  ${clampedPage + 1}/${pageCount}` : ''
+  // ▲▼ scroll hint (same idiom as the destination list) instead of the old
+  // 1/2 page tag — the route scrolls line-wise now, pages no longer exist.
+  const scrollTag = maxOffset > 0
+    ? `  ${offset > 0 ? '▲' : ' '}${offset < maxOffset ? '▼' : ' '}`
+    : ''
 
   // Container left edge sits at ROUTE_TEXT_X - padding so the first glyph
   // column lands exactly on ROUTE_TEXT_X, clear of the icon gutter.
   return buildBodyScreen(
-    `→ ${destName}${demoTag}${pageTag}`,
+    `→ ${destName}${demoTag}${scrollTag}`,
     new TextContainerProperty({
       xPosition: ROUTE_TEXT_X - ROUTE_TEXT_PADDING, yPosition: BODY_Y,
       width: SCREEN_W - (ROUTE_TEXT_X - ROUTE_TEXT_PADDING), height: BODY_H,
       borderWidth: 0, borderColor: 0, paddingLength: ROUTE_TEXT_PADDING,
       containerID: ID_ROW_BASE, containerName: 'row0',
-      content: pageLines.map(l => l.text).join('\n') || ' ',
+      content: windowLines.map(l => l.text).join('\n') || ' ',
       isEventCapture: 0,
     }),
     'スクロール:送り  タップ:再検索  2回:戻る',
