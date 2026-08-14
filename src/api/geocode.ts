@@ -9,8 +9,8 @@ export interface GeocodeResult {
 
 // Nominatim usage policy: identify heavy usage via the email param.
 // User-Agent is a forbidden header in browser fetch, so this is our only knob.
-// Leave empty to omit; set your contact address before publishing.
-const CONTACT_EMAIL = ''
+// Note: the bundle is publicly extractable, so this address is public.
+const CONTACT_EMAIL = 'nat3mitaro@gmail.com'
 
 const GSI_ENDPOINT = 'https://msearch.gsi.go.jp/address-search/AddressSearch'
 const NOMINATIM_ENDPOINT = 'https://nominatim.openstreetmap.org/search'
