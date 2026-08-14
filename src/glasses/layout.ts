@@ -127,12 +127,12 @@ export function buildListScreen(
 ): TextContainerProperty[] {
   const containers: TextContainerProperty[] = [
     buildCapture(),
-    buildHeader('NavigatEven  目的地を選択'),
+    buildHeader('Route Planner  目的地を選択'),
   ]
 
   if (destinations.length === 0) {
     return buildBodyScreen(
-      'NavigatEven  目的地を選択',
+      'Route Planner  目的地を選択',
       new TextContainerProperty({
         xPosition: 20, yPosition: BODY_Y + 40,
         width: SCREEN_W - 40, height: 60,

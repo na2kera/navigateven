@@ -1,7 +1,7 @@
 {
-  "package_id": "com.navigateven.app",
+  "package_id": "com.na2kera.routeplanner",
   "edition": "202601",
-  "name": "NavigatEven",
+  "name": "Route Planner",
   "version": "0.1.1",
   "min_app_version": "2.0.0",
   "min_sdk_version": "0.0.11",

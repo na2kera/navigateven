@@ -72,7 +72,7 @@ export function mountPhoneUI(root: HTMLElement): void {
       .btn-delete { background: #4a2a2a; color: #ff9090; }
       .empty { color: #555; padding: 16px 0; text-align: center; }
     </style>
-    <h1>NavigatEven</h1>
+    <h1>Route Planner</h1>
     <div class="card">
       <h2 id="form-title">目的地を追加</h2>
       <input type="hidden" id="edit-id" value="" />
