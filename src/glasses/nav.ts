@@ -13,11 +13,15 @@ import {
 import type { Destination } from '../types.ts'
 import { getAllDestinations } from '../store/destinations.ts'
 import {
-  planRoutes,
   type RoutePlan,
   type RouteDisplayLine,
   type RouteIconKind,
 } from '../api/transit.ts'
+import {
+  searchRoutesFromOrigin,
+  searchDemoRoutes,
+  TOKYO_STATION_DEMO_ORIGIN,
+} from './route-search.ts'
 import {
   CONTAINER_TOTAL,
   VISIBLE_ROWS,
@@ -25,6 +29,7 @@ import {
   buildCandidatesScreen,
   buildRouteScreen,
   buildMessageScreen,
+  buildUnsupportedRegionScreen,
   buildRouteIcons,
   hiddenIconContainers,
   wrapLines,
@@ -38,7 +43,8 @@ import {
 // candidate list so double-tap can return to it without re-searching.
 type Screen =
   | { kind: 'list' }
-  | { kind: 'searching'; dest: Destination }
+  | { kind: 'searching'; dest: Destination; message: string }
+  | { kind: 'unsupported'; dest: Destination }
   | {
       kind: 'candidates'
       dest: Destination
@@ -57,9 +63,6 @@ type Screen =
     }
   | { kind: 'error'; dest: Destination; message: string }
 
-// Fallback when the host returns no position (the simulator does not
-// implement the location bridge at all). Tokyo Station.
-const DEMO_LOCATION = { lat: 35.6812, lng: 139.7671 }
 const LOCATION_TIMEOUT_MS = 8000
 
 let bridge: EvenAppBridge | null = null
@@ -120,8 +123,10 @@ function buildScreen(): ScreenPayload {
       return textOnly(buildListScreen(destinations, selectedIndex, scrollOffset))
     case 'searching':
       return textOnly(
-        buildMessageScreen(`→ ${screen.dest.name}`, '経路を検索中...', '2回タップ: 戻る'),
+        buildMessageScreen(`→ ${screen.dest.name}`, screen.message, '2回タップ: 戻る'),
       )
+    case 'unsupported':
+      return textOnly(buildUnsupportedRegionScreen(screen.dest.name))
     case 'candidates':
       return textOnly(buildCandidatesScreen(
         screen.dest.name,
@@ -261,7 +266,7 @@ async function pushIcons(pushes: IconPush[]): Promise<void> {
 // getAppLocation may never resolve on hosts without location support, so we
 // race it against our own timeout rather than trusting options.timeoutMs.
 async function getCurrentLocation(): Promise<{ lat: number; lng: number; isDemo: boolean }> {
-  if (!bridge) return { ...DEMO_LOCATION, isDemo: true }
+  if (!bridge) return { ...TOKYO_STATION_DEMO_ORIGIN, isDemo: true }
   try {
     const location = await Promise.race<AppLocation | null>([
       bridge.getAppLocation({
@@ -276,35 +281,65 @@ async function getCurrentLocation(): Promise<{ lat: number; lng: number; isDemo:
   } catch {
     // fall through to demo location
   }
-  return { ...DEMO_LOCATION, isDemo: true }
+  return { ...TOKYO_STATION_DEMO_ORIGIN, isDemo: true }
 }
 
 async function startSearch(dest: Destination): Promise<void> {
   const token = ++searchToken
-  screen = { kind: 'searching', dest }
+  screen = { kind: 'searching', dest, message: '現在地から経路を検索中...' }
   render()
 
   try {
     const origin = await getCurrentLocation()
     if (token !== searchToken) return
-    const plans = await planRoutes(origin, dest)
+    const result = await searchRoutesFromOrigin(origin, dest)
     if (token !== searchToken) return
 
-    if (plans.length === 0) {
-      screen = { kind: 'error', dest, message: '経路が見つかりませんでした' }
+    if (result.plans.length === 0) {
+      screen = result.isDemo
+        ? { kind: 'error', dest, message: '経路が見つかりませんでした' }
+        : { kind: 'unsupported', dest }
     } else {
       screen = {
         kind: 'candidates',
         dest,
-        plans,
+        plans: result.plans,
         selectedIndex: 0,
-        isDemo: origin.isDemo,
+        isDemo: result.isDemo,
       }
     }
     render()
   } catch {
     if (token !== searchToken) return
     screen = { kind: 'error', dest, message: '経路検索に失敗しました\n通信状態を確認してください' }
+    render()
+  }
+}
+
+async function startDemoSearch(dest: Destination): Promise<void> {
+  const token = ++searchToken
+  screen = { kind: 'searching', dest, message: '東京駅からデモ検索中...' }
+  render()
+
+  try {
+    const result = await searchDemoRoutes(dest)
+    if (token !== searchToken) return
+
+    if (result.plans.length === 0) {
+      screen = { kind: 'error', dest, message: 'デモ経路が見つかりませんでした' }
+    } else {
+      screen = {
+        kind: 'candidates',
+        dest,
+        plans: result.plans,
+        selectedIndex: 0,
+        isDemo: true,
+      }
+    }
+    render()
+  } catch {
+    if (token !== searchToken) return
+    screen = { kind: 'error', dest, message: 'デモ検索に失敗しました\n通信状態を確認してください' }
     render()
   }
 }
@@ -324,6 +359,9 @@ export function handleInput(eventType: OsEventTypeList): void {
     case 'searching':
       if (eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) backToList()
       break
+    case 'unsupported':
+      handleUnsupportedRegion(screen, eventType)
+      break
     case 'candidates':
       handleCandidates(screen, eventType)
       break
@@ -333,6 +371,17 @@ export function handleInput(eventType: OsEventTypeList): void {
     case 'error':
       handleError(screen, eventType)
       break
+  }
+}
+
+function handleUnsupportedRegion(
+  current: Extract<Screen, { kind: 'unsupported' }>,
+  eventType: OsEventTypeList,
+): void {
+  if (eventType === OsEventTypeList.CLICK_EVENT) {
+    startDemoSearch(current.dest)
+  } else if (eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+    backToList()
   }
 }
 

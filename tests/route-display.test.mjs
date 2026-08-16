@@ -12,12 +12,19 @@ import {
   maxRouteLineOffset,
   buildRouteIcons,
   buildRouteScreen,
+  buildCandidatesScreen,
+  buildUnsupportedRegionScreen,
   hiddenIconContainers,
   ROUTE_VISIBLE_LINES,
   ROUTE_SCROLL_STEP,
   CONTAINER_TOTAL,
   ICON_CONTAINER_COUNT,
 } from '../src/glasses/layout.ts'
+import {
+  searchRoutesFromOrigin,
+  searchDemoRoutes,
+  TOKYO_STATION_DEMO_ORIGIN,
+} from '../src/glasses/route-search.ts'
 
 // --- fixtures ---------------------------------------------------------
 
@@ -267,4 +274,81 @@ test('hiddenIconContainers: 4 parked containers with stable IDs', () => {
     assert.equal(c.containerID, 9 + i)
     assert.ok(c.xPosition < 0 && c.yPosition < 0)
   })
+})
+
+// --- review demo fallback ---------------------------------------------
+
+test('route search uses the supplied real origin', async () => {
+  const calls = []
+  const expected = [{ durationSecs: 600 }]
+  const result = await searchRoutesFromOrigin(
+    { lat: 35.0, lng: 139.0, isDemo: false },
+    { lat: 35.1, lng: 139.1 },
+    async (from, to) => {
+      calls.push({ from, to })
+      return expected
+    },
+  )
+
+  assert.deepEqual(result, { plans: expected, isDemo: false })
+  assert.equal(calls.length, 1)
+})
+
+test('zero real-location results do not silently start a demo search', async () => {
+  const calls = []
+  const destination = { lat: 35.658, lng: 139.7016 }
+  const result = await searchRoutesFromOrigin(
+    { lat: 51.5072, lng: -0.1276, isDemo: false },
+    destination,
+    async (from, to) => {
+      calls.push({ from, to })
+      return []
+    },
+  )
+
+  assert.deepEqual(result, { plans: [], isDemo: false })
+  assert.deepEqual(calls, [
+    { from: { lat: 51.5072, lng: -0.1276, isDemo: false }, to: destination },
+  ])
+})
+
+test('demo search runs only when explicitly called and uses Tokyo Station', async () => {
+  const calls = []
+  const demoPlans = [{ durationSecs: 900 }]
+  const destination = { lat: 35.658, lng: 139.7016 }
+  const result = await searchDemoRoutes(
+    destination,
+    async (from, to) => {
+      calls.push({ from, to })
+      return demoPlans
+    },
+  )
+
+  assert.deepEqual(result, { plans: demoPlans, isDemo: true })
+  assert.deepEqual(calls, [{ from: TOKYO_STATION_DEMO_ORIGIN, to: destination }])
+})
+
+test('unsupported-region screen offers an explicit Tokyo Station demo', () => {
+  const screen = buildUnsupportedRegionScreen('渋谷駅')
+  const body = screen.find(c => c.containerName === 'row0').content
+  const footer = screen.find(c => c.containerName === 'footer').content
+
+  assert.equal(body, 'この地域の経路検索には\n対応していません')
+  assert.equal(footer, 'タップ:東京駅デモ  2回:戻る')
+})
+
+test('demo route screens explicitly identify Tokyo Station as the origin', () => {
+  const plan = {
+    departureSecs: 32400,
+    arrivalSecs: 33000,
+    durationSecs: 600,
+    transferCount: 0,
+    routeNames: ['山手線'],
+    lines: [{ text: '経路' }],
+  }
+  const candidates = buildCandidatesScreen('渋谷駅', [plan], 0, true)
+  const route = buildRouteScreen('渋谷駅', plan.lines, 0, true)
+
+  assert.match(candidates.find(c => c.containerName === 'header').content, /\[デモ:東京駅\]/)
+  assert.match(route.find(c => c.containerName === 'header').content, /\[デモ:東京駅\]/)
 })
