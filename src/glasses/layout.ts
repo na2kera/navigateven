@@ -209,7 +209,7 @@ export function buildCandidatesScreen(
   selectedIndex: number,
   isDemoLocation: boolean,
 ): TextContainerProperty[] {
-  const demoTag = isDemoLocation ? ' [DEMO位置]' : ''
+  const demoTag = isDemoLocation ? ' [デモ:東京駅]' : ''
   const containers: TextContainerProperty[] = [
     buildCapture(),
     buildHeader(`→ ${destName}${demoTag}  経路候補`),
@@ -357,7 +357,7 @@ export function buildRouteScreen(
   const offset = clampOffset(wrappedLines, lineOffset)
   const windowLines = routeWindowLines(wrappedLines, offset)
 
-  const demoTag = isDemoLocation ? ' [DEMO位置]' : ''
+  const demoTag = isDemoLocation ? ' [デモ:東京駅]' : ''
   // ▲▼ scroll hint (same idiom as the destination list) instead of the old
   // 1/2 page tag — the route scrolls line-wise now, pages no longer exist.
   const scrollTag = maxOffset > 0
@@ -398,5 +398,13 @@ export function buildMessageScreen(
       isEventCapture: 0,
     }),
     footerText,
+  )
+}
+
+export function buildUnsupportedRegionScreen(destName: string): TextContainerProperty[] {
+  return buildMessageScreen(
+    `→ ${destName}`,
+    'この地域の経路検索には\n対応していません',
+    'タップ:東京駅デモ  2回:戻る',
   )
 }
